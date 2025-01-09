@@ -16,7 +16,7 @@ os.environ['GITHUB_ACCESS_TOKEN'] = os.getenv('GITHUB_ACCESS_TOKEN')
 
 from src.clients.github import GitClient
 from src.clients.agent import ExecutionGraph
-from src.tools.db_tools import query_db
+from src.tools.db_tools import query_bitsandbytes, query_phidata
 from src.utils import split_and_chunk, openai_ef, load_conversation
 from src.helper.dataloader import Github, GraphConfig
 from src.helper.requests import LoadHistory, AddRepositoryRequest, GetResponseRequest
@@ -24,7 +24,7 @@ from src.helper.requests import LoadHistory, AddRepositoryRequest, GetResponseRe
 
 chroma_client = chromadb.HttpClient(host='localhost', port=8000)
 git_client = GitClient(config=Github())
-graph = ExecutionGraph(config=GraphConfig(tools=[query_db]))
+graph = ExecutionGraph(config=GraphConfig(tools=[query_phidata, query_bitsandbytes]))
 
 app = FastAPI()
 
