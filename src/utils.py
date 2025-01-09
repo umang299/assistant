@@ -57,13 +57,23 @@ def load_conversation(thread_id):
     for vals in channel_vals:
         channel_rep = msgpack.unpackb(vals.data, raw=False)
         msg = channel_rep[2]['content']
-        type_ = channel_rep[2]['type']
+        type_ = channel_rep[1]
+
+        if type_ == 'HumanMessage':
+            temp = {
+                'role' : 'user',
+                'content' : msg
+            }
+            history.append(temp)
+        elif type_ == 'AIMessage' and len(msg) != 0 :
+            temp = {
+                'role' : 'assistant',
+                'content' : msg
+            }
+            history.append(temp)
+        else:
+            pass
         
-        history.append({
-            'role' : 'user' if type_ == 'human' else 'assistant',
-            'content' : msg
-        })
-    
     return history
 
 
