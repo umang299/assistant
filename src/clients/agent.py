@@ -17,7 +17,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 cwd = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 sys.path.append(cwd)
 
-from helper.dataloader import GraphConfig
+from src.helper.dataloader import GraphConfig
 
 
 class ExecutionGraph:
