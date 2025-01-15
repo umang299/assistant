@@ -6,6 +6,7 @@ from IPython.display import Image
 
 
 from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from langgraph.graph import MessagesState
@@ -30,11 +31,32 @@ class ExecutionGraph:
         
         self.config = config
         self.sys_msg = SystemMessage(
-            content="You are a helpful assistant tasked with helping the \
-                user breakdown complex implementations of large code bases.")
+            content="""You are a helpful assistant tasked with helping the \
+                user breakdown complex implementations of large code bases.""")
 
         self.llm_with_tools = self.__initialize_llm()
         self.graph = self.build_graph()
+    
+    def build_prompt(self, state):
+        chat_history = list()
+        for msg in state['messages']:
+            if msg.type == 'ai':
+                temp = ("ai", msg.content)
+                chat_history.append(temp)
+            elif msg.type == 'human':
+                temp = ("human", msg.content)
+                chat_history.append(temp)
+            else:
+                pass
+        
+        template = ChatPromptTemplate(
+                    messages=[self.sys_msg,
+                              ("placeholder", "{conversation}")
+                    ]
+                )
+        
+        prompt = template.invoke({'conversation' : chat_history})
+        return prompt
 
     def __state_checkpoint(self):
         """
@@ -57,7 +79,8 @@ class ExecutionGraph:
         Assistant node of the graph. This invokes the LLM with a system message and
         current state message to generate a response.
         """
-        return {"messages": [self.llm_with_tools.invoke([self.sys_msg] + state["messages"])]}
+        prompt = self.build_prompt(state=state)
+        return {"messages": [self.llm_with_tools.invoke(input=prompt)]}
 
     def build_graph(self):
         """
