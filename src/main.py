@@ -20,11 +20,13 @@ from src.tools.db_tools import query_bitsandbytes, query_phidata
 from src.utils import split_and_chunk, openai_ef, load_conversation
 from src.helper.dataloader import Github, GraphConfig
 from src.helper.requests import LoadHistory, AddRepositoryRequest, GetResponseRequest
+from src.helper.logger import get_logger
 
 
+logger = get_logger(name='assistant')
 chroma_client = chromadb.HttpClient(host='localhost', port=8000)
 git_client = GitClient(config=Github())
-graph = ExecutionGraph(config=GraphConfig(tools=[query_phidata, query_bitsandbytes]))
+graph = ExecutionGraph(config=GraphConfig(tools=[query_phidata, query_bitsandbytes]), logger=logger)
 
 app = FastAPI()
 
@@ -35,7 +37,8 @@ async def load_history(request: LoadHistory):
     """
     try:
         history = load_conversation(
-            request.thread_id
+            thread_id=request.thread_id,
+            logger=logger
         )
         return history
     except Exception as e:
@@ -49,8 +52,10 @@ async def list_repositories():
     """
     try:
         repos = chroma_client.list_collections()
+        logger.info('Found %s repositories', len(repos))
         return repos
     except Exception as e:
+        logger.error('list_repositories: Failed to fetch repositories -> %s', str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 
