@@ -6,12 +6,12 @@ from IPython.display import Image
 
 
 from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain.prompts import ChatPromptTemplate, PromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage, RemoveMessage
 
-from langgraph.graph import MessagesState
-from langgraph.graph import StateGraph, START
-from langgraph.prebuilt import ToolNode, tools_condition
+
+from langgraph.prebuilt import ToolNode
+from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 
 
@@ -19,6 +19,8 @@ cwd = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 sys.path.append(cwd)
 
 from src.helper.dataloader import GraphConfig
+from src.utils import summarizer_condition
+from src.helper.states import OverallState, IOState
 
 
 class ExecutionGraph:
@@ -44,6 +46,48 @@ class ExecutionGraph:
                 self.logger.error('Agent Initialization Failed')
             else:
                 print('Agent Initialization Failed')
+
+    def __summarize_conversation(
+                            self,
+                            state: OverallState
+                        ) -> IOState:
+        ## Get summary
+        summary = state.get('summary', '')
+        messages = state.get('messages', '')
+
+        if summary or len(messages) % 10 != 0:
+            summary_temp = """
+            Message History:\n{history}\n
+            This is the summary of the conversation so far {summary}\n\n
+            Extent the summary by taking into account the new messages above:
+            """
+
+            prompt_template = PromptTemplate(
+                                    input_variables=['summary', 'history'],
+                                    template=summary_temp
+                                )
+            prompt = prompt_template.invoke({
+                'summary' : summary,
+                'history' : messages
+            })
+        else:
+            summary_temp = """
+            Message History:\n{history}\n
+            Create a summary by taking into account the new messages above.
+            """
+
+            prompt_template = PromptTemplate(
+                                    input_variables=['history'],
+                                    template=summary_temp
+                                )
+            prompt = prompt_template.invoke({
+                'history' : messages[-10:]
+            })
+
+
+        resp = self.llm_with_tools.invoke(prompt)
+        return {'summary' : resp.content, "messages" : messages}
+
 
     def __build_prompt(self, state):
         chat_history = list()
@@ -98,7 +142,7 @@ class ExecutionGraph:
                     )
             return None
 
-    def __assitant_node(self, state: MessagesState):
+    def __assitant_node(self, state: IOState) -> IOState:
         """
         Assistant node of the graph. This invokes the LLM with a system message and
         current state message to generate a response.
@@ -112,16 +156,18 @@ class ExecutionGraph:
         Tools node to execute function calls from the llm.
         """
         try:
-            builder = StateGraph(MessagesState)
+            builder = StateGraph(state_schema=OverallState, input=IOState, output=IOState)
             builder.add_node("assistant", self.__assitant_node)
+            builder.add_node("summarizer", self.__summarize_conversation)
             builder.add_node("tools", ToolNode(self.config.tools))
 
             builder.add_edge(START, "assistant")
             builder.add_conditional_edges(
                 "assistant",
-                tools_condition
+                summarizer_condition
             )
             builder.add_edge("tools", "assistant")
+            builder.add_edge("summarizer", END)
             graph = builder.compile(checkpointer=self.__state_checkpoint())
 
             if self.logger is not None:
