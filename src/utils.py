@@ -3,6 +3,8 @@ import sys
 import yaml
 import sqlite3
 import msgpack
+from pydantic import BaseModel
+from typing import Union, Any, Literal
 from llama_index.core.node_parser import CodeSplitter
 import chromadb.utils.embedding_functions as embedding_functions
 
@@ -13,6 +15,48 @@ openai_ef = embedding_functions.OpenAIEmbeddingFunction(
                 api_key=os.getenv('OPENAI_API_KEY'),
                 model_name="text-embedding-3-small"
             )
+
+
+def summarizer_condition(
+    state: Union[list[Any], dict[str, Any], BaseModel],
+    messages_key: str = "messages",
+) -> Literal["summarizer", "tools", "__end__"]:
+    """
+    Route to 'summarizer_node' if summarization is required, or to 'tools' if tool calls exist.
+
+    Args:
+        state: Current state of the graph.
+
+    Returns:
+        A valid node key for routing.
+    """
+    # Extract messages
+    if isinstance(state, list):
+        messages = state
+    elif isinstance(state, dict) and (messages := state.get(messages_key, [])):
+        pass
+    elif messages := getattr(state, messages_key, []):
+        pass
+    else:
+        raise ValueError(f"No messages found in state: {state}")
+
+    # Validate there are messages
+    if not messages:
+        raise ValueError(f"No messages found in '{messages_key}' key")
+
+    # Get the last AI message
+    last_ai_message = messages[-1]
+
+    # Check if the last AI message has tool calls
+    if hasattr(last_ai_message, "tool_calls") and len(last_ai_message.tool_calls) > 0:
+        return "tools"
+
+    # Check if summarization is required
+    if len(messages) > 10:
+        return "summarizer"
+
+    # If no summarization is needed, return "__end__"
+    return "__end__"
 
 
 def read_yaml(file_path, logger=None):
