@@ -15,6 +15,26 @@ openai_ef = embedding_functions.OpenAIEmbeddingFunction(
             )
 
 
+def read_text_file(file_path):
+    """
+    Reads the content of a .txt file and returns it as a string.
+
+    Args:
+        file_path: Path to the .txt file
+    Return: 
+        text: Content of the file as a string
+    """
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            return "".join(file.readlines())
+    except FileNotFoundError:
+        print(f"Error: The file '{file_path}' was not found.")
+        return None
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+
 def read_yaml(file_path):
     """
     Reads data from a YAML file and returns it as a dictionary.
