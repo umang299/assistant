@@ -6,7 +6,7 @@ from IPython.display import Image
 
 
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, get_buffer_string, AIMessage
 
 from langgraph.graph import MessagesState
 from langgraph.graph import StateGraph, START, END
@@ -20,7 +20,8 @@ sys.path.append(cwd)
 
 from src.utils import read_text_file
 from src.helper.dataloader import GraphConfig
-from src.helper.states import GenerateAnalyst, Perspectives
+from src.tools.search import tavily_web_search, wikipedia_search, arxiv_search
+from src.helper.states import GenerateAnalyst, Perspectives, InterviewState, SearchQuery, Analyst
 
 
 class ExecutionGraph:
@@ -178,3 +179,208 @@ class ChiefAnalyst:
                     config=config
                 )
         return resp
+
+
+class InterviewRoom:
+    def __init__(self):
+        self.question_prompt = read_text_file(
+                            file_path=os.path.join(
+                                cwd, 'src', 'prompts', 'questions.txt'
+                            ))
+        self.answer_prompt = read_text_file(
+                            file_path=os.path.join(
+                                cwd, 'src', 'prompts', 'answer.txt'
+                            ))
+        self.search_prompt = read_text_file(
+                            file_path=os.path.join(
+                                cwd, 'src', 'prompts', 'search.txt'
+                            ))
+        self.writer_prompt = read_text_file(
+                            file_path=os.path.join(
+                                cwd, 'src', 'prompts', 'writer.txt'
+                            ))
+        self.graph = self.build_graph()
+        self.llm = ChatOpenAI(model='gpt-4o')
+
+
+    def generate_question(self, state: InterviewState):
+        """ 
+        Node to generate a question using the analyst
+        persona.
+        """
+
+        # Get state
+        analyst = state.get("analyst", None)
+        messages = state.get("messages", None)
+
+        if analyst is not None and messages is not None:
+            system_message = self.question_prompt.format(goals=analyst.persona)
+            question = self.llm.invoke([SystemMessage(content=system_message)]+messages)
+        else:
+            question = ''
+
+        return {"messages": [question]}
+
+    def search_web(self, state: InterviewState):
+        """
+        Node to generate a web search query and
+        fetch response from the internet.
+        """
+        messages = state.get('messages', None)
+        structured_llm = self.llm.with_structured_output(SearchQuery)
+
+        if messages is not None:
+            search_query = structured_llm.invoke([self.search_prompt]+messages)
+            formatted_search_docs = tavily_web_search(query=search_query.search_query)
+        else:
+            formatted_search_docs = ''
+
+        return {"context": [formatted_search_docs]}
+
+    def search_wiki(self, state: InterviewState):
+        """
+        Node to generate a web search query and
+        fetch response from wikipedia. 
+        """
+
+        structured_llm = self.llm.with_structured_output(SearchQuery)
+        search_query = structured_llm.invoke([self.search_prompt]+state['messages'])
+
+        formatted_search_docs = wikipedia_search(
+                                        query=search_query.search_query
+                                    )
+
+        return {"context": [formatted_search_docs]}
+    
+    def search_arxiv(self, state: InterviewState):
+        """
+        Node to generate a web search query and
+        fetch response from Arxiv. 
+        """
+        # Search query
+        structured_llm = self.llm.with_structured_output(SearchQuery)
+        search_query = structured_llm.invoke([self.search_prompt]+state['messages'])
+
+        formatted_search_docs = arxiv_search(query=search_query.search_query)
+
+        return {"context": [formatted_search_docs]}
+    
+
+    def generate_answer(self, state: InterviewState):    
+        """
+        Node to answer a question 
+        """
+        # Get state
+        analyst = state["analyst"]
+        messages = state["messages"]
+        context = state["context"]
+
+        system_message = self.answer_prompt.format(
+                            goals=analyst.persona, context=context
+                        )
+        answer = self.llm.invoke([SystemMessage(content=system_message)]+messages)
+        answer.name = "expert"
+        return {"messages": [answer]}
+
+    def save_interview(self, state: InterviewState):
+        """
+        Save interviews
+        """
+        messages = state["messages"]
+        interview = get_buffer_string(messages)
+        return {"interview": interview}
+    
+    def write_section(self, state: InterviewState):
+        """
+        Node to write a summary on the conversation.
+        """
+        interview = state.get("interview")
+        context = state.get("context")
+        analyst = state.get("analyst")
+
+        system_message = self.writer_prompt.format(
+                                    focus=analyst.description,
+                                    interview= interview
+                                )
+        section = self.llm.invoke(
+                        input=[SystemMessage(content=system_message)] +
+                              [HumanMessage(content=f"Use this source to write your section: {context}")]
+                        ) 
+
+        return {"sections": [section.content]}
+
+    def route_messages(self,
+                       state: InterviewState,
+                       name: str = "expert"
+                    ):
+        """
+        Route between question and answer
+        """
+        # Get messages
+        messages = state.get("messages")
+        max_num_turns = state.get('max_num_turns',2)
+
+        # Check the number of expert answers 
+        num_responses = len(
+            [m for m in messages if isinstance(m, AIMessage) and m.name == name]
+        )
+
+        # End if expert has answered more than the max turns
+        if num_responses >= max_num_turns:
+            return 'save_interview'
+
+        # This router is run after each question - answer pair 
+        # Get the last question asked to check if it signals the end of discussion
+        last_question = messages[-2]
+        
+        if "Thank you so much for your help" in last_question.content:
+            return 'save_interview'
+        return "ask_question"
+
+    def build_graph(self):
+        """
+        Function to build the interview room.
+        """
+        interview_builder = StateGraph(InterviewState)
+        interview_builder.add_node("ask_question", self.generate_question)
+        interview_builder.add_node("search_web", self.search_web)
+        interview_builder.add_node("search_wikipedia", self.search_wiki)
+        interview_builder.add_node("search_arxiv", self.search_arxiv)
+        interview_builder.add_node("answer_question", self.generate_answer)
+        interview_builder.add_node("save_interview", self.save_interview)
+        interview_builder.add_node("write_section", self.write_section)
+
+        # Flow
+        interview_builder.add_edge(START, "ask_question")
+        interview_builder.add_edge("ask_question", "search_web")
+        interview_builder.add_edge("ask_question", "search_wikipedia")
+        interview_builder.add_edge("ask_question", "search_arxiv")
+        interview_builder.add_edge("search_arxiv", "answer_question")
+        interview_builder.add_edge("search_web", "answer_question")
+        interview_builder.add_edge("search_wikipedia", "answer_question")
+        interview_builder.add_conditional_edges("answer_question", self.route_messages,['ask_question','save_interview'])
+        interview_builder.add_edge("save_interview", 'write_section')
+        interview_builder.add_edge("write_section", END)
+
+        graph = interview_builder.compile(checkpointer=MemorySaver())
+        return graph
+
+    def run(self,
+            thread_id: str,
+            analyst: Analyst,
+            messages: str,
+            num_turns: int
+        ):
+
+        """
+        Function to run chief analyst agent
+        """
+        thread = {"configurable": {"thread_id": thread_id}}
+        interview = self.graph.invoke(
+                            input={
+                                "analyst": analyst,
+                                "messages": messages,
+                                "max_num_turns": num_turns},
+                            config=thread
+                        )
+        return interview['sections'][0]
