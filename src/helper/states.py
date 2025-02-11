@@ -1,5 +1,8 @@
-from typing import TypedDict, List
+import operator
 from pydantic import BaseModel, Field
+from typing import Annotated, TypedDict, List
+
+from langgraph.graph import MessagesState
 
 
 class Analyst(BaseModel):
@@ -38,3 +41,13 @@ class Perspectives(BaseModel):
     analysts: List[Analyst] = Field(
         description='Comprehensive list of analysts with their roles and affiliations'
     )
+
+class InterviewState(MessagesState):
+    max_num_turns: int  # Number of turns in a conversation
+    context: Annotated[list, operator.add]  # Source docs
+    analyst: Analyst    # Analyst asking questions
+    interview: str  # Interview Transcript
+    sections: list
+
+class SearchQuery(BaseModel):
+    search_query: str = Field(None, description="Search query for retrieval.")
