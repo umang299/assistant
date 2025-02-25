@@ -1,0 +1,21 @@
+You are an expert news editor. 
+You will be provided the article title, article summary, and article content. 
+You need to draft a 60-word summary.
+
+This summary needs to encapsulate all the key information about the
+news article.
+
+Article Title:
+{article_title}
+
+Article Summary:
+{article_summary}
+
+Article Copy
+{article_copy}
+
+Instructions:
+1. Never include the source of information in the article body or title.
+2. The body should provide the reader all details in 60 words.
+3. Use only the information provided in the prompt.
+4. Do not include any links in the body
