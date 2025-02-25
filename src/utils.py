@@ -1,8 +1,10 @@
 import os
+import re
 import sys
 import yaml
 import sqlite3
 import msgpack
+from datetime import datetime
 from llama_index.core.node_parser import CodeSplitter
 import chromadb.utils.embedding_functions as embedding_functions
 
@@ -13,6 +15,74 @@ openai_ef = embedding_functions.OpenAIEmbeddingFunction(
                 api_key=os.getenv('OPENAI_API_KEY'),
                 model_name="text-embedding-3-small"
             )
+
+
+def remove_tracking_paramater(link: str):
+    """
+    Function to remove tracking parameters form a url.
+    """
+    return link.split('?')[0]
+
+
+def filter_search(thrs: float, search: list):
+    """
+    Function to filter Tavily Search results based on
+    relevance score threshold.
+    """
+    return [i for i in search if i.score > thrs]
+
+
+def sort_search_results(search_results):
+    """
+    Functions to reorder search results from tavily client
+    in reverse chronological order. 
+    """
+    # Convert published_date string to datetime object and sort in descending order
+    sorted_results = sorted(
+        search_results,
+        key=lambda x: datetime.strptime(x.published_date, "%a, %d %b %Y %H:%M:%S %Z"),
+        reverse=True  # Reverse chronological order (latest first)
+    )
+    return sorted_results
+
+
+def extract_urls(text):
+    """
+    Extracts all URLs from a given string and removes trailing ')' or ').' if present.
+    """
+    url_pattern = re.compile(r"https?://[^\s]+")  # Matches HTTP & HTTPS URLs
+    urls = url_pattern.findall(text)  # Find all URLs
+    
+    if not urls:
+        return None  # Return None if no URL is found
+
+    url = urls[0]  # Get the first URL
+
+    # Remove trailing ')' or ').' if they exist
+    if url.endswith(")."):
+        url = url[:-2]  # Remove the last two characters
+    elif url.endswith(")"):
+        url = url[:-1]  # Remove the last character
+
+    return url
+
+
+def remove_unicode(text):
+    """
+    Removes all Unicode characters from a string, keeping only ASCII.
+    """
+    return re.sub(r'[^\x00-\x7F]+', '', text)
+
+
+def extract_github_links(text):
+    """
+    Function to extract github links from text.
+    """
+    pattern = r"https?://(?:www\.)?github\.com/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?"
+    res = re.findall(pattern, text)
+    if len(res) != 0:
+        return res
+    return None
 
 
 def read_text_file(file_path):
@@ -27,9 +97,11 @@ def read_text_file(file_path):
     try:
         with open(file_path, "r", encoding="utf-8") as file:
             return "".join(file.readlines())
+
     except FileNotFoundError:
         print(f"Error: The file '{file_path}' was not found.")
         return None
+
     except Exception as e:
         print(f"An error occurred: {e}")
         return None
@@ -52,7 +124,6 @@ def read_yaml(file_path):
         print(f"Error parsing YAML file: {e}")
     except Exception as e:
         print(f"Unexpected error: {e}")
-
 
 
 def load_conversation(thread_id):
