@@ -6,6 +6,8 @@ from IPython.display import Image
 
 
 from langchain_openai import ChatOpenAI
+from langchain.prompts import PromptTemplate
+from langchain.agents import initialize_agent, load_tools
 from langchain_core.messages import HumanMessage, SystemMessage, get_buffer_string, AIMessage
 
 from langgraph.graph import MessagesState
@@ -18,10 +20,17 @@ from langgraph.checkpoint.memory import MemorySaver
 cwd = os.path.realpath(os.path.join(os.path.dirname(os.path.dirname(__file__)), '..'))
 sys.path.append(cwd)
 
-from src.utils import read_text_file
+from src.utils import (read_text_file, remove_unicode, 
+                       filter_search, sort_search_results, 
+                       remove_tracking_paramater, extract_urls)
 from src.helper.dataloader import GraphConfig
 from src.tools.search import tavily_web_search, wikipedia_search, arxiv_search
-from src.helper.states import GenerateAnalyst, Perspectives, InterviewState, SearchQuery, Analyst
+from src.helper.states import GenerateAnalyst, Perspectives, InterviewState, SearchQuery, Analyst, JournalistState
+from src.config.tavily_search import ExtractConfig, SearchConfig
+from src.clients.tavily import Tavily
+
+
+tav_client = Tavily()
 
 
 class ExecutionGraph:
@@ -384,3 +393,163 @@ class InterviewRoom:
                             config=thread
                         )
         return interview['sections'][0]
+
+
+class AIJournalist:
+    """
+    AI Journalist
+    """
+    def __init__(self):
+        self.llm = ChatOpenAI(api_key=os.getenv('OPENAI_API_KEY'), 
+                              model='gpt-4o', 
+                              temperature=0.0
+                            )
+        self.img_generation_prompt = PromptTemplate(
+                                name='Image Generation Prompt',
+                                input_variables=['context'],
+                                template=read_text_file(
+                                    file_path=os.path.join(
+                                        cwd, 'src', 'prompts',
+                                        'news', 'image_generation.txt'
+                                    )
+                                )
+                            )
+
+        self.content_prompt = PromptTemplate(
+                                name='Content Prompt',
+                                input_variables=['context'],
+                                template=read_text_file(
+                                    file_path=os.path.join(
+                                        cwd, 'src', 'prompts',
+                                        'news', 'content_generation.txt'
+                                    )
+                                )
+                            )
+
+    def extract(self, state: JournalistState):
+        """
+        Function extract information from search results. 
+        """
+        article_url = state.get('article_url')
+
+        extract_config = ExtractConfig(
+            include_images=False,
+            extract_depth='basic'
+        )
+
+        res = dict()
+        for i, url_ in article_url.items():
+            temp = tav_client.run(cfg=extract_config.to_dict(),
+                                operation='extract',
+                                url=[url_]
+                            )
+
+            if len(temp) != 0:
+                res[i] = remove_unicode(text=temp[0].raw_content)
+            else:
+                res[i] = ''
+        state['additional_knowledge'] = res
+        return state
+
+    def fetch_news(self, state: JournalistState):
+        """
+        Function to fetch news
+        """
+        topic = state.get('topic')
+        max_results = state.get('max_results')
+
+        search_cfg = SearchConfig(search_depth='basic',
+                                topic='news',
+                                days=2,
+                                max_results=max_results,
+                                include_images=True,
+                                include_image_description=True
+                            )
+
+        news = tav_client.run(cfg=search_cfg.to_dict(), operation='search', query=topic)
+        news = filter_search(thrs=0.5, search=news)
+        news = sort_search_results(search_results=news)
+
+        content_text = {i:j.content for i, j in enumerate(news)}
+        content_url = {i: remove_tracking_paramater(j.url) for i,j  in enumerate(news)}
+        content_title = {i: j.title for i, j in enumerate(news)}
+
+        seen_urls = {}  # Dictionary to track first occurrence of each URL
+        keys_to_remove = set()  # Using a set for O(1) lookup & storage
+
+        for idx, url in content_url.items():
+            if url in seen_urls:  # If duplicate found, mark for removal
+                keys_to_remove.add(idx)
+            else:
+                seen_urls[url] = idx  # Store the first occurrence of this URL
+
+        # Remove duplicates efficiently
+        for i in keys_to_remove:
+            content_title.pop(i, None)
+            content_text.pop(i, None)
+            content_url.pop(i, None)
+
+        return {
+                    'article_summary' : content_text, 
+                    'article_url' : content_url,
+                    'article_title' : content_title
+                }
+
+    def generate_image(self, state: JournalistState):
+        """
+        Function to generate images for news articles. 
+        """
+        title = state.get('article_title')
+        summary = state.get('article_summary')
+        content = state.get('additional_knowledge')
+
+        tools = load_tools(["dalle-image-generator"])
+        agent = initialize_agent(tools, self.llm, agent="zero-shot-react-description", verbose=True)
+
+        resp = dict()
+        for i, j in title.items():
+            info = f"Title: {title[i]}\nArticle Summary:\n{summary[i]}\nArticle Content:\n{content[i]}"
+            prompt = self.img_generation_prompt.format(context=info)
+            output = agent.run(prompt)
+            resp[i] = extract_urls(text=output)
+        state['response_images'] = resp
+        return state
+
+    def make_content(self, state: JournalistState):
+        """
+        Function to make content.
+        """
+        summary = state.get('article_summary')
+        title = state.get('article_title')
+        content = state.get('additional_knowledge')
+
+
+        resp = dict()
+        for i, c in summary.items():
+            prompt = self.content_prompt.format(article_summary=summary[i],
+                                        article_copy=content[i],
+                                        article_title=title[i]
+                                        )
+            response = self.llm.invoke(input=[HumanMessage(content=prompt)])
+            resp[i] = remove_unicode(response.content)
+        state['response'] = resp
+        return state
+
+    def build_agent(self):
+        """
+        Function to build agent.
+        """
+        builder = StateGraph(state_schema=JournalistState)
+        builder.add_node('fetch_news', self.fetch_news)
+        builder.add_node('extract_info', self.extract)
+        builder.add_node('generate_imgs', self.generate_image)
+        builder.add_node('make_content', self.make_content)
+
+
+        builder.add_edge(START, 'fetch_news')
+        builder.add_edge('fetch_news', 'extract_info')
+        builder.add_edge('extract_info', 'generate_imgs')
+        builder.add_edge('generate_imgs', 'make_content')
+        builder.add_edge('make_content', END)
+        graph = builder.compile()
+        return graph
