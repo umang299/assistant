@@ -100,84 +100,56 @@ class SearchResult(BaseModel):
         return self.model_dump()
 
 
-class SearchConfig(BaseModel):
+class ExtractResult(BaseModel):
     """
-    Configuration settings for a search operation.
+    Represents the result of a content extraction process.
 
     Attributes:
-        search_depth (str): The search depth, either 'basic' or 'advance'. Defaults to 'basic'.
-        topic (str): The search topic, either 'news' or 'general'. Defaults to 'news'.
-        days (Optional[int]): The number of days for filtering news results (only allowed if topic is 'news'). 
-                              Defaults to None.
-        max_results (int): The maximum number of search results to return. Defaults to 5.
-        include_images (bool): Whether to include images in search results. Defaults to True.
-        include_image_description (bool): Whether to include image descriptions. Defaults to True.
-        include_answer (bool): Whether to include an AI-generated answer in results. Defaults to False.
-        include_raw_content (bool): Whether to include raw content from the search result. Defaults to False.
-        include_domains (List[str]): A list of domains to include in search. Defaults to an empty list.
-        exclude_domains (List[str]): A list of domains to exclude from search. Defaults to an empty list.
+        id_ (str): Unique identifier for the extraction result.
+        url (str):
+            The URL of the search result.
+        raw_content (Optional[str]):
+            The most query-related content extracted from the scraped URL.
+            Defaults to None if no content is available.
+        images (Optional[List[str]]):
+            A list of image URLs related to the search result.
+            Defaults to None if no images are found.
+        response_time (float):
+            The time taken to complete the extraction process.
     """
-    search_depth: str = Field("basic", pattern="^(basic|advance)$", 
-                              description="Search depth: 'basic' or 'advance'")
+    id_: str = Field(
+        description='Unique id for each search result.'
+    )
+    url: str = Field(
+        description='The URL of the search result.'
+    )
+    raw_content: Optional[str] = Field(
+        None, description='The most query-related content from the scraped URL.'
+    )
 
-    topic: str = Field("news", pattern="^(news|general)$", 
-                       description="Search topic: 'news' or 'general'")
+    images: Optional[List[str]] = Field(
+        None, description='List of image URLs related to the search result.'
+    )
 
-    days: Optional[int] = Field(None, ge=1, le=30, 
-                                description="Days (allowed only if topic is 'news')")
+    response_time: float = Field(
+        None, description='Time taken to complete extraction'
+    )
 
-    max_results: int = Field(5, ge=1, le=100, 
-                             description="Max number of results")
-
-    include_images: bool = True
-    include_image_description: bool = True
-    include_answer: bool = False
-    include_raw_content: bool = False
-    include_domains: List[str] = []
-    exclude_domains: List[str] = []
-    
-    @field_validator("days", mode='before')
-    def validate_days(cls, v, info: ValidationInfo):
+    @property
+    def show(self):
         """
-        Validates that 'days' is only allowed if the topic is 'news'.
-
-        Args:
-            v (Optional[int]): The value of the 'days' field.
-            info (ValidationInfo): Validation context containing other field values.
-
-        Raises:
-            ValueError: If 'days' is provided but the topic is not 'news'.
+        Formats and returns a summary of the search result.
 
         Returns:
-            Optional[int]: The validated 'days' value.
+            str: A formatted string containing the title and published date.
         """
-        if info.data.get("topic") != "news" and v is not None:
-            raise ValueError("'days' is only allowed if topic is 'news'")
-        return v
-    
-    @field_validator("include_image_description")
-    def validate_image_description(cls, v, info: ValidationInfo):
-        """Validates that 'include_image_description' can only be True if 'include_images' is True.
+        return f'URL: {self.url}\nContent: {self.raw_content or "Unknown"}'
 
-        Args:
-            v (bool): The value of the 'include_image_description' field.
-            info (ValidationInfo): Validation context containing other field values.
-
-        Raises:
-            ValueError: If 'include_image_description' is True but 'include_images' is False.
-
-        Returns:
-            bool: The validated 'include_image_description' value.
-        """
-        if v and not info.data.get("include_images"):
-            raise ValueError("'include_image_description' can only be True if 'include_images' is True")
-        return v
-    
     def to_dict(self) -> dict:
         """
         Converts the Pydantic model to a dictionary.
 
         Returns:
-            dict: The dictionary representation of the search configuration.
+            dict: The dictionary representation of the search result.
         """
         return self.model_dump()
